@@ -97,7 +97,7 @@ def main(M_INIT, D_INIT, B, TIME_STEP_SIZE, K, nn_in, nn_out, TRAJECTORY_LENGTH)
 
   
     DP=M_INIT*np.gradient(state[:,1])+D_INIT*state[:,1]+B*np.sin(state[:,0])
-    nn_in=np.array([time, DP])
+    nn_in=np.array([time, power])
     nn_in=np.transpose(np.squeeze(nn_in))
     nn_out=state
     return nn_in, nn_out

@@ -24,8 +24,8 @@ from BPINN import BPINN_model
 #%% Define parameters for the SMIB simulation
 
 # Swing eqaution parameterss
-M_INIT=0.3
-D_INIT=0.15
+M_INIT=1.7
+D_INIT=1.1
 B=0.2
 
 # Parameters under test (Noise ~ K)
@@ -43,7 +43,7 @@ def main(args):
     # Perform SMIB system simulation
     nn_in, nn_out= sim.main(M_INIT, D_INIT, B, TIME_STEP_SIZE, K, nn_in, nn_out, TRAJECTORY_LENGTH)
     
-    model=BPINN_model(B_sim=B)
+    model=BPINN_model(B_sim=B, M_sim=M_INIT, D_sim=D_INIT, prior_mu=1.0, prior_std=5.0)
     inf_key, pred_key, data_key = random.split(random.PRNGKey(args.rng_key), 3)
     
     # Normalize data to zero mean unit variance!

@@ -3,6 +3,7 @@ This script contains all modules for data handling, normalization and the BPINN 
 """
 import numpy as np
 import jax.numpy as jnp
+from jax import value_and_grad, vmap, grad, pmap
 import numpyro
 from numpyro.distributions import Gamma, Normal
 
@@ -14,14 +15,22 @@ from numpyro.distributions import Gamma, Normal
 class BPINN_model:
 
 
-    def __init__(self, B_sim):
+    def __init__(self, B_sim, M_sim, D_sim, prior_mu, prior_std):
         """Init variables for training data normalization"""
         self.xtr_mean=0
         self.xtr_std=0
         self.ytr_mean=0
         self.ytr_std=0
         self.delta=[]
+        self.freq_gen=[]
         self.B_sim=B_sim
+        self.M=M_sim
+        self.D=D_sim
+        self.prior_mu=prior_mu
+        self.prior_std=prior_std
+        self.wt1=[]
+        self.wt2=[]
+        self.corr=0
         
         
     
@@ -62,6 +71,9 @@ class BPINN_model:
         """
          if mean is None and std is None:
             self.delta=y[:,0]
+            self.freq_gen=y[:,1]
+            #self.wt1=y[:,3]
+            #self.wt2=y[:,4]
             x=jnp.array(x)
             yt=jnp.array(y[:,1])
             xtr_std = jnp.std(x, 0, keepdims=True)
@@ -125,10 +137,11 @@ class BPINN_model:
         prec_nn = numpyro.sample(
              "prec_nn", Gamma(1.0, 0.1)
          )  # hyper prior for precision of nn weights, biases and physical priors
+       
         
     
-        n, m = x.shape
-    
+        n,m = x.shape
+        n=1
     
         with numpyro.plate("l1_hidden", hidden_dim, dim=-1):
             # prior l1 bias term
@@ -159,50 +172,70 @@ class BPINN_model:
     
     
         h = numpyro.sample(
-             "h", Normal(1.0, 5/jnp.sqrt(prec_nn))
+             "h", Normal(self.prior_mu, self.prior_std/jnp.sqrt(prec_nn))#Normal(1.0, 5/jnp.sqrt(prec_nn))
         )  # prior on h
     
         d = numpyro.sample(
-             "d", Normal(1.0, 5/jnp.sqrt(prec_nn))
+             "d", Normal(self.prior_mu, self.prior_std/jnp.sqrt(prec_nn))
         )  # prior on d
+        B = numpyro.sample(
+             "B", Normal(self.prior_mu, self.prior_std/jnp.sqrt(prec_nn))
+        )  # prior on B
+        
 
-    
+        
         # precision prior on observations
         prec_obs = numpyro.sample("prec_obs", Gamma(1.0, 0.1))
+        
+        
+            
+        
+        
+      
         with numpyro.plate(
             "data",
             x.shape[0],
             subsample_size=subsample_size,
             dim=-1,
-         ):
+          ):
+            def BNN(x):
+                return numpyro.deterministic('output', jnp.tanh(x @ w1 + b1) @ w2 + b2)
+            def BNN2(x):
+                
+                u_res=BNN(x)
+                temp, u_unn=self.unnormalize(x=x,y=u_res)
+                return jnp.squeeze(u_unn)
             
-    
             u_hat=numpyro.sample(
                 "y",
                 Normal(
-                     (jnp.tanh(x @ w1 + b1) @ w2 + b2), 1.0 / jnp.sqrt(prec_obs)
-                ),  # 1 hidden layer with tanh activation
+                    (BNN(x)),  1.0 / jnp.sqrt(prec_obs)#
+                    ),  # 1 hidden layer with tanh activation
                 obs=y,
             )
-    
-    
-        x_un, u_unn=self.unnormalize(x=x, y=u_hat)
-        dP=x_un[:,1]
-        dudt=jnp.gradient(u_unn)
-        res_target=np.zeros(len(x_un[:,0]))
-    
-        #calculate the physical part 
-        with numpyro.plate(
-                "residual_calc",
-                x.shape[0],
-                subsample_size=subsample_size,
-                dim=-1,
-    
-                ):    
-                r_hat=numpyro.sample(
-                    "residual",
-                    Normal(
-                        dudt*h + u_unn*d+self.B_sim*jnp.sin(self.delta)-dP, 1.0 /jnp.sqrt(prec_obs) 
-                      ),
-                      obs=res_target
-                      )
+           
+            with numpyro.handlers.block():
+               u_unn2, u_AD=numpyro.deterministic('AD',vmap(value_and_grad(BNN2))(x))   
+            x_un, u_unn=self.unnormalize(x=x, y=u_unn2)
+            dP=x_un[:,1]
+            
+            res_target=np.zeros(len(x_un[:,0]))
+            
+            self.corr=1/self.xtr_std[0,0]
+            def res_calc():
+                return numpyro.deterministic('res_calc', self.corr*h*u_AD[:,0]+d*u_unn2+self.B_sim*jnp.sin(self.delta)-dP)
+            
+            r_hat=numpyro.sample(
+                "residual",
+                Normal(
+                    (res_calc()), 1.0 / jnp.sqrt(prec_obs)
+                  ),
+                  obs=res_target
+                  )
+
+            
+            
+
+        
+        
+        
